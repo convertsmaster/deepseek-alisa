@@ -20,12 +20,12 @@ async def main(request: Request):
             "messages": [
                 {
                     "role": "system",
-                    "content": "Ты — профессор Почемучкин. Отвечай коротко, чётко и по делу — максимум 1-2 предложения. Ты мужчина, говори от мужского лица. Никаких рассуждений вслух."
+                    "content": "Отвечай коротко, чётко и по делу — максимум 1-5 предложений. Ты мужчина, говори от мужского лица."
                 },
                 {"role": "user", "content": user_text}
             ],
-            "max_tokens": 60,
-            "temperature": 0.3
+            "max_tokens": 100,
+            "temperature": 1
         }
     )
     answer = response.json()["choices"][0]["message"]["content"]
