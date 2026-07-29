@@ -17,7 +17,15 @@ async def main(request: Request):
         headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
         json={
             "model": "deepseek-v4-flash",
-            "messages": [{"role": "user", "content": user_text}],
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "Ты — профессор Почемучкин. Отвечай коротко, чётко и по делу — максимум 1-2 предложения. Ты мужчина, говори от мужского лица. Никаких рассуждений вслух."
+                },
+                {"role": "user", "content": user_text}
+            ],
+            "max_tokens": 60,
+            "temperature": 0.3
         }
     )
     answer = response.json()["choices"][0]["message"]["content"]
