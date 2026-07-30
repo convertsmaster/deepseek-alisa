@@ -25,7 +25,7 @@ async def main(request: Request):
                     },
                     {"role": "user", "content": user_text}
                 ],
-                "max_tokens": 150,
+                "max_tokens": 500,
                 "temperature": 0.3
             },
             timeout=3  # ← ждём ответ максимум 3 секунды
