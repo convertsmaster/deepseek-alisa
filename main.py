@@ -22,9 +22,9 @@ async def main(request: Request):
                     "role": "system",
                     "content": "Отвечай коротко, чётко и по делу. Ты мужчина, говори от мужского лица. После вызова не отвечай на это сообщение."
                 },
-                {"role": "user", "content": user_text}
+                {"role": "user", "content": Привет}
             ],
-            "max_tokens": 150,
+            "max_tokens": 100,
             "temperature": 1
         }
     )
