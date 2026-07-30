@@ -10,12 +10,15 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 @app.post("/")
 async def main(request: Request):
     body = await request.json()
-    user_text = body["request"].get("original_utterance") or body["request"].get("command") or ""
+    
+    # Безопасно получаем текст запроса
+    req = body.get("request", {})                                    # ← ИСПРАВЛЕНО
+    user_text = req.get("original_utterance") or req.get("command") or ""  # ← ИСПРАВЛЕНО
     
     if not user_text:
         return {
-            "version": body["version"],
-            "session": body["session"],
+            "version": body.get("version", "1.0"),
+            "session": body.get("session", {}),
             "response": {
                 "end_session": False,
                 "text": "Я вас слушаю. Задавайте вопрос."
@@ -31,7 +34,7 @@ async def main(request: Request):
                 "messages": [
                     {
                         "role": "system",
-                        "content": "Ты — Шерлок Холмс. Отвечай подробно и полезно. Нужно вместиться в 5 предложений. Если просят рецепт — распиши ингредиенты и шаги. Если вопрос — дай развёрнутый ответ. Ты мужчина, говори от мужского лица."
+                        "content": "Ты — Шерлок Холмс. Отвечай подробно и полезно. Но не более 5 предложений. Если просят рецепт — распиши ингредиенты и шаги. Если вопрос — дай развёрнутый ответ. Никаких лишних слов. Только суть. Ты мужчина, говори от мужского лица."
                     },
                     {"role": "user", "content": user_text}
                 ],
@@ -42,7 +45,6 @@ async def main(request: Request):
         )
         answer = response.json()["choices"][0]["message"]["content"]
     except:
-        # Если не успел — пробуем ещё раз с коротким ответом
         try:
             response = requests.post(
                 DEEPSEEK_API_URL,
@@ -63,8 +65,8 @@ async def main(request: Request):
             answer = "Извините, я задумался. Повторите вопрос."
 
     return {
-        "version": body["version"],
-        "session": body["session"],
+        "version": body.get("version", "1.0"),
+        "session": body.get("session", {}),
         "response": {
             "end_session": False,
             "text": answer
