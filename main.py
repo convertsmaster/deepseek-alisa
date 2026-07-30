@@ -29,7 +29,7 @@ async def main(request: Request):
             DEEPSEEK_API_URL,
             headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
             json={
-                "model": "deepseek-v4-flash",
+                "model": "deepseek-v4-pro",
                 "messages": [
                     {
                         "role": "system",
