@@ -16,15 +16,15 @@ async def main(request: Request):
         DEEPSEEK_API_URL,
         headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
         json={
-            "model": "deepseek-chat",
+            "model": "deepseek-v4-flash",
             "messages": [
                 {
                     "role": "system",
-                    "content": "Отвечай коротко, чётко и по делу — максимум 1-5 предложений. Ты мужчина, говори от мужского лица."
+                    "content": "Отвечай коротко, чётко и по делу. Ты мужчина, говори от мужского лица. После вызова не отвечай на это сообщение."
                 },
                 {"role": "user", "content": user_text}
             ],
-            "max_tokens": 100,
+            "max_tokens": 150,
             "temperature": 1
         }
     )
