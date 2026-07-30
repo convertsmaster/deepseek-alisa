@@ -10,7 +10,17 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 @app.post("/")
 async def main(request: Request):
     body = await request.json()
-    user_text = body["request"]["original_utterance"]
+    user_text = body["request"].get("original_utterance") or body["request"].get("command") or ""
+    
+    if not user_text:
+        return {
+            "version": body["version"],
+            "session": body["session"],
+            "response": {
+                "end_session": False,
+                "text": "Я вас слушаю. Задавайте вопрос."
+            }
+        }
 
     try:
         response = requests.post(
@@ -21,14 +31,14 @@ async def main(request: Request):
                 "messages": [
                     {
                         "role": "system",
-                        "content": "Отвечай коротко — максимум 5 предложений. Ты мужчина, говори от мужского лица."
+                        "content": "Ты — Шерлок Холмс. Отвечай подробно и полезно. Если просят рецепт — распиши ингредиенты и шаги. Если вопрос — дай развёрнутый ответ. Ты мужчина, говори от мужского лица."
                     },
                     {"role": "user", "content": user_text}
                 ],
                 "max_tokens": 500,
-                "temperature": 0.3
+                "temperature": 0.7
             },
-            timeout=3  # ← ждём ответ максимум 3 секунды
+            timeout=3
         )
         answer = response.json()["choices"][0]["message"]["content"]
     except:
