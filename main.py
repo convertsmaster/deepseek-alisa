@@ -38,11 +38,29 @@ async def main(request: Request):
                 "max_tokens": 500,
                 "temperature": 0.7
             },
-            timeout=3
+            timeout=4
         )
         answer = response.json()["choices"][0]["message"]["content"]
     except:
-        answer = "Извините, я задумался. Повторите вопрос."
+        # Если не успел — пробуем ещё раз с коротким ответом
+        try:
+            response = requests.post(
+                DEEPSEEK_API_URL,
+                headers={"Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+                json={
+                    "model": "deepseek-v4-flash",
+                    "messages": [
+                        {"role": "system", "content": "Ты — Шерлок Холмс. Отвечай кратко — 2-3 предложения. Ты мужчина, говори от мужского лица."},
+                        {"role": "user", "content": user_text}
+                    ],
+                    "max_tokens": 150,
+                    "temperature": 0.5
+                },
+                timeout=3
+            )
+            answer = response.json()["choices"][0]["message"]["content"]
+        except:
+            answer = "Извините, я задумался. Повторите вопрос."
 
     return {
         "version": body["version"],
