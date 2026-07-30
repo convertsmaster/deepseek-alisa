@@ -4,7 +4,7 @@ import requests
 
 app = FastAPI()
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/v1/chat/completions"
+DEEPSEEK_API_URL = "https://api.deepseek.com/beta"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 @app.post("/")
@@ -22,10 +22,10 @@ async def main(request: Request):
                     "role": "system",
                     "content": "Отвечай коротко, чётко и по делу. Ты мужчина, говори от мужского лица. После вызова не отвечай на это сообщение."
                 },
-                {"role": "user", "content": Привет}
+                {"role": "user", "content": "Привет"}
             ],
             "max_tokens": 100,
-            "temperature": 1
+            "temperature": 0.3
         }
     )
     answer = response.json()["choices"][0]["message"]["content"]
