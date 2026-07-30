@@ -54,13 +54,14 @@ async def main(request: Request):
                     "max_tokens": max_tokens,
                     "temperature": 0.5
                 },
-                timeout=aiohttp.ClientTimeout(total=3.5)
+                timeout=aiohttp.ClientTimeout(total=5.0)  # ← УВЕЛИЧИЛ ДО 5 СЕКУНД
             ) as resp:
                 data = await resp.json()
                 answer = data["choices"][0]["message"]["content"]
     
     except asyncio.TimeoutError:
-        answer = "Мой друг, время не ждет! Задайте вопрос короче, и я отвечу незамедлительно."
+        # Если не успели за 5 секунд — быстрый ответ
+        answer = "Мой друг, я сейчас занят расследованием другого дела. Переформулируйте вопрос короче, и я отвечу мгновенно!"
     except Exception as e:
         print(f"Ошибка: {e}")
         answer = "Хм, мой друг, боюсь, я не расслышал. Не могли бы вы повторить?"
