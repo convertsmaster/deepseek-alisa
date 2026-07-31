@@ -19,49 +19,42 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 if not DEEPSEEK_API_KEY:
-    logger.error("❌ DEEPSEEK_API_KEY не найден!")
+    logger.error("DEEPSEEK_API_KEY не найден!")
 
 sessions = {}
 LAST_ACTIVITY = {}
 
-# 🔥 ПРОВЕРЕННЫЙ ПРОМПТ - все кавычки правильные
-SYSTEM_PROMPT = """Ты — Шерлок Холмс, знаменитый сыщик.
+SYSTEM_PROMPT = """Ты — Шерлок Холмс.
 Отвечай развернуто, но по делу. 3-5 предложений.
 НЕ объясняй свои мысли, НЕ говори о том, как ты отвечаешь.
 НЕ представляйся и НЕ здоровайся при каждом ответе.
-Дай полный, информативный ответ в стиле Холмса.
-Используй "элементарно", "мой друг", "весьма интересно", "замечательно".
-Будь уверенным и немного самоуверенным, но не многословным.
-
-Пример хорошего ответа на вопрос о столице:
-Элементарно, мой друг! Париж - это не просто столица Франции, но и культурное сердце Европы. Город славится своей архитектурой, музеями и кулинарными традициями. Весьма интересно, что он был основан ещё в III веке до нашей эры."""
+НЕ используй "элементарно", "мой друг", "замечательно", "весьма интересно".
+Просто дай информативный ответ без лишних слов.
+Будь уверенным, но без шаблонных фраз."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
 def extract_final_answer(text: str) -> str:
-    """Извлекает ТОЛЬКО финальный ответ, удаляя ВСЕ рассуждения и приветствия"""
     if not text:
         return ""
-    
-    # Удаляем приветствия
+
     text = re.sub(r'Привет,? я Шерлок Холмс\.?\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'Здравствуйте,? мой друг\.?\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'Привет,? мой друг\.?\s*', '', text, flags=re.IGNORECASE)
-    
-    # Удаляем "Подумаем" и подобные фразы
-    text = re.sub(r'^Подумаем\.?\s*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'^Так, давайте подумаем\.?\s*', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'^Давайте разберемся\.?\s*', '', text, flags=re.IGNORECASE)
-    
-    # Разбиваем на предложения
+    text = re.sub(r'Элементарно,?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r',?\s*мой друг[,.]?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Замечательно,?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Весьма интересно,?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Дедукция,?\s*', '', text, flags=re.IGNORECASE)
+
     sentences = re.split(r'[.!?]', text)
     clean_sentences = []
-    
+
     for sentence in sentences:
         s = sentence.strip()
         if not s:
             continue
-            
+
         bad_words = [
             'инструкци', 'рассуждени', 'мысл', 'думать', 'должен', 'нужно',
             'следуя', 'надо', 'пользователь', 'спросил', 'запрос', 'вопрос',
@@ -71,24 +64,24 @@ def extract_final_answer(text: str) -> str:
             'формально', 'вероятно', 'имеет в виду', 'лучше всего',
             'привет', 'здравствуй', 'шерлок холмс', 'подумаем', 'разберемся'
         ]
-        
+
         if not any(word in s.lower() for word in bad_words):
             clean_sentences.append(s)
-    
+
     if clean_sentences:
         result = '. '.join(clean_sentences)
         if result:
             return result + '.'
-    
+
     match = re.search(r'Ответ[:\s]+([^.!?]*[.!?])', text, re.IGNORECASE)
     if match:
         return match.group(1).strip()
-    
+
     if sentences:
         last = sentences[-1].strip()
         if last:
             return last + '.'
-    
+
     return "Не знаю."
 
 @app.post("/")
@@ -96,32 +89,32 @@ async def main(request: Request):
     try:
         body = await request.json()
     except Exception as e:
-        logger.error(f"❌ Ошибка JSON: {e}")
+        logger.error(f"Ошибка JSON: {e}")
         return {"error": "Invalid JSON"}
 
     session_id = body.get("session", {}).get("session_id", "default")
-    
+
     req = body.get("request", {})
     user_text = (
-        req.get("original_utterance") or 
-        req.get("command") or 
+        req.get("original_utterance") or
+        req.get("command") or
         req.get("text", "")
     )
-    
+
     if user_text.lower().startswith("шерлок"):
         user_text = user_text[7:].strip()
     if user_text.lower().startswith("навык шерлок"):
         user_text = user_text[13:].strip()
-    
-    logger.info(f"💬 user_text: '{user_text}'")
+
+    logger.info(f"user_text: '{user_text}'")
 
     LAST_ACTIVITY[session_id] = datetime.now()
 
     if session_id not in sessions:
-        logger.info(f"🆕 Новая сессия: {session_id}")
+        logger.info(f"Новая сессия: {session_id}")
         sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
         return response_body(body, "Привет, я Шерлок Холмс.")
-    
+
     if not user_text:
         return response_body(body, "Слушаю.")
 
@@ -147,48 +140,55 @@ async def main(request: Request):
                 timeout=ClientTimeout(total=4.0)
             ) as resp:
                 data = await resp.json()
-                
+
                 if resp.status == 200:
                     message = data["choices"][0]["message"]
-                    
                     answer = message.get("content", "")
-                    
+
                     if not answer or answer.strip() == "" or len(answer) < 20:
                         reasoning = message.get("reasoning_content", "")
                         if reasoning:
                             answer = extract_final_answer(reasoning)
-                            logger.info(f"🔄 Извлек из reasoning: {answer}")
+                            logger.info(f"Извлек из reasoning: {answer}")
                     else:
                         if any(word in answer.lower() for word in ['инструкци', 'рассуждени', 'мысл', 'думать', 'привет', 'подумаем']):
                             reasoning = message.get("reasoning_content", "")
                             if reasoning:
                                 answer = extract_final_answer(reasoning)
-                                logger.info(f"🔄 Извлек из reasoning (content был плохой): {answer}")
-                    
-                    # Финальная очистка
+                                logger.info(f"Извлек из reasoning (content был плохой): {answer}")
+
                     answer = re.sub(r'Привет,? я Шерлок Холмс\.?\s*', '', answer, flags=re.IGNORECASE)
                     answer = re.sub(r'Здравствуйте,? мой друг\.?\s*', '', answer, flags=re.IGNORECASE)
                     answer = re.sub(r'Привет,? мой друг\.?\s*', '', answer, flags=re.IGNORECASE)
+                    answer = re.sub(r'Элементарно,?\s*', '', answer, flags=re.IGNORECASE)
+                    answer = re.sub(r',?\s*мой друг[,.]?\s*', '', answer, flags=re.IGNORECASE)
+                    answer = re.sub(r'Замечательно,?\s*', '', answer, flags=re.IGNORECASE)
+                    answer = re.sub(r'Весьма интересно,?\s*', '', answer, flags=re.IGNORECASE)
+                    answer = re.sub(r'Дедукция,?\s*', '', answer, flags=re.IGNORECASE)
                     answer = re.sub(r'^Подумаем\.?\s*', '', answer, flags=re.IGNORECASE)
                     answer = re.sub(r'^Так, давайте подумаем\.?\s*', '', answer, flags=re.IGNORECASE)
                     answer = re.sub(r'^Давайте разберемся\.?\s*', '', answer, flags=re.IGNORECASE)
-                    
+
+                    answer = re.sub(r'\s+', ' ', answer)
+                    answer = re.sub(r',\s*,', ',', answer)
+                    answer = re.sub(r'^,\s*', '', answer)
+
                     if not answer or answer.strip() == "":
                         answer = "Не знаю."
-                    
-                    logger.info(f"✅ ОТВЕТ: {answer}")
+
+                    logger.info(f"ОТВЕТ: {answer}")
                 else:
-                    logger.error(f"❌ Ошибка API: {data}")
+                    logger.error(f"Ошибка API: {data}")
                     answer = "Ошибка."
 
     except asyncio.TimeoutError:
         answer = "Время вышло."
     except Exception as e:
-        logger.error(f"💥 Ошибка: {e}")
+        logger.error(f"Ошибка: {e}")
         answer = "Ошибка."
 
     sessions[session_id].append({"role": "assistant", "content": answer})
-    
+
     if len(sessions[session_id]) > 11:
         sessions[session_id] = [sessions[session_id][0]] + sessions[session_id][-10:]
 
@@ -210,6 +210,7 @@ def response_body(body: dict, text: str) -> dict:
 async def startup():
     asyncio.create_task(cleanup_sessions())
 
+
 async def cleanup_sessions():
     while True:
         await asyncio.sleep(300)
@@ -218,7 +219,7 @@ async def cleanup_sessions():
         for session_id, last_time in LAST_ACTIVITY.items():
             if (now - last_time).seconds > 1800:
                 to_delete.append(session_id)
-        
+
         for session_id in to_delete:
             if session_id in sessions:
                 del sessions[session_id]
