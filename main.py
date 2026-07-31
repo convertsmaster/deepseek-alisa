@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
+# 🔥 ПРАВИЛЬНЫЙ URL ДЛЯ МОДЕЛЕЙ С ПОИСКОМ
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 if not DEEPSEEK_API_KEY:
@@ -25,12 +26,12 @@ sessions = {}
 LAST_ACTIVITY = {}
 
 SYSTEM_PROMPT = """Ты — Шерлок Холмс.
-Отвечай развернуто, но по делу. 3-5 предложений.
+Отвечай развернуто, но по делу. 2-3 предложения.
 НЕ объясняй свои мысли, НЕ говори о том, как ты отвечаешь.
 НЕ представляйся и НЕ здоровайся при каждом ответе.
 НЕ используй "элементарно", "мой друг", "замечательно", "весьма интересно".
 Просто дай информативный ответ без лишних слов.
-Будь уверенным, но без шаблонных фраз."""
+Если нужно узнать актуальную информацию (погода, новости, события, фильмы), используй поиск в интернете."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
@@ -121,7 +122,8 @@ async def main(request: Request):
         return response_body(body, "Слушаю.")
 
     is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
-    max_tokens = 1000 if is_expand else 700
+    # 🔥 УМЕНЬШИЛ max_tokens ДЛЯ СКОРОСТИ
+    max_tokens = 300 if is_expand else 200
 
     sessions[session_id].append({"role": "user", "content": user_text})
 
@@ -134,12 +136,12 @@ async def main(request: Request):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "deepseek-v4-flash",
+                    "model": "deepseek-v4-flash-search",  # 🔥 С ПОИСКОМ
                     "messages": sessions[session_id],
                     "max_tokens": max_tokens,
                     "temperature": 0.3
                 },
-                timeout=ClientTimeout(total=3.5)
+                timeout=ClientTimeout(total=3.5)  # 🔥 3.5 СЕКУНДЫ
             ) as resp:
                 data = await resp.json()
 
