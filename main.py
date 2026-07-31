@@ -2,6 +2,7 @@ import os
 import asyncio
 import json
 import logging
+import re
 from fastapi import FastAPI, Request
 from aiohttp import ClientSession, ClientTimeout, ClientError
 from datetime import datetime
@@ -23,14 +24,58 @@ if not DEEPSEEK_API_KEY:
 sessions = {}
 LAST_ACTIVITY = {}
 
-SYSTEM_PROMPT = """Ты — Шерлок Холмс, знаменитый сыщик из Викторианской Англии. 
-Отвечай ТОЛЬКО готовым ответом, БЕЗ каких-либо рассуждений, пояснений или мыслей вслух.
-Твой ответ должен быть кратким, максимум 3-4 предложения.
-Используй выражения: 'элементарно', 'замечательно', 'весьма интересно', 'дедукция'.
-Обращайся 'мой друг'.
-Если пользователь просит 'разверни', 'подробнее', 'расскажи детальнее' — тогда отвечай развернуто, но всё равно БЕЗ рассуждений."""
+# 🔥 КОРОТКИЙ И ЧЕТКИЙ ПРОМПТ
+SYSTEM_PROMPT = """Ты — Шерлок Холмс. 
+Отвечай ТОЛЬКО на вопрос пользователя.
+НЕ объясняй свои мысли, НЕ говори о том, как ты отвечаешь.
+Просто дай ответ в стиле Холмса.
+Кратко, 1-2 предложения.
+Используй "элементарно", "мой друг".
+
+При первом обращении скажи кратко: "Привет, я Шерлок Холмс."
+Без лишних слов и приветствий."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
+
+def clean_answer(text: str) -> str:
+    """Очищает ответ от мусора и инструкций"""
+    if not text:
+        return ""
+    
+    patterns = [
+        r'Следуя инструкции,?.*?(?:\.|$)',
+        r'Надо ответить.*?(?:\.|$)',
+        r'Пользователь спросил.*?(?:\.|$)',
+        r'Ответ должен быть.*?(?:\.|$)',
+        r'Использовать.*?(?:\.|$)',
+        r'Мы должны ответить.*?(?:\.|$)',
+        r'Запрос:.*?(?:\.|$)',
+        r'Нужно ответить.*?(?:\.|$)',
+        r'Вопрос:.*?(?:\.|$)',
+        r'Так как.*?(?:\.|$)',
+        r'Поскольку.*?(?:\.|$)',
+        r'Инструкция.*?(?:\.|$)',
+        r'Требуется.*?(?:\.|$)',
+        r'Важно.*?(?:\.|$)',
+    ]
+    
+    for pattern in patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    
+    match = re.search(r'Ответ[:\s]+([^.!?]*[.!?])', text, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    
+    text = ' '.join(text.split())
+    
+    if any(word in text.lower() for word in ['инструкци', 'рассуждени', 'мысл', 'думать']):
+        sentences = [s.strip() for s in text.split('.') if s.strip()]
+        if sentences:
+            last = '. '.join(sentences[-2:])
+            if last:
+                return last + '.'
+    
+    return text.strip()
 
 @app.post("/")
 async def main(request: Request):
@@ -40,16 +85,21 @@ async def main(request: Request):
         logger.error(f"❌ Ошибка JSON: {e}")
         return {"error": "Invalid JSON"}
 
-    logger.info("=" * 60)
-
     session_id = body.get("session", {}).get("session_id", "default")
-
+    
     req = body.get("request", {})
     user_text = (
         req.get("original_utterance") or 
         req.get("command") or 
         req.get("text", "")
     )
+    
+    # Убираем слово "шерлок" из запроса
+    if user_text.lower().startswith("шерлок"):
+        user_text = user_text[7:].strip()
+    if user_text.lower().startswith("навык шерлок"):
+        user_text = user_text[13:].strip()
+    
     logger.info(f"💬 user_text: '{user_text}'")
 
     LAST_ACTIVITY[session_id] = datetime.now()
@@ -57,10 +107,11 @@ async def main(request: Request):
     if session_id not in sessions:
         logger.info(f"🆕 Новая сессия: {session_id}")
         sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        return response_body(body, "Здравствуйте, мой друг! Я Шерлок Холмс. Чем могу быть полезен?")
+        # 🔥 КОРОТКОЕ ПРИВЕТСТВИЕ
+        return response_body(body, "Привет, я Шерлок Холмс.")
     
     if not user_text:
-        return response_body(body, "Я здесь, мой друг! Слушаю вас внимательно.")
+        return response_body(body, "Слушаю.")
 
     is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
     max_tokens = 300 if is_expand else 150
@@ -76,11 +127,10 @@ async def main(request: Request):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "deepseek-v4-pro",
+                    "model": "deepseek-v4-flash",
                     "messages": sessions[session_id],
                     "max_tokens": max_tokens,
-                    "temperature": 0.3,  # 🔥 Понизил температуру для более предсказуемых ответов
-                    "reasoning_effort": "minimal"  # 🔥 Минимум рассуждений
+                    "temperature": 0.3
                 },
                 timeout=ClientTimeout(total=3.5)
             ) as resp:
@@ -89,37 +139,35 @@ async def main(request: Request):
                 if resp.status == 200:
                     message = data["choices"][0]["message"]
                     
-                    # 🔥 Берем ТОЛЬКО content, игнорируем reasoning_content
                     answer = message.get("content", "")
                     
-                    # Если content пустой - пробуем извлечь из reasoning_content
                     if not answer or answer.strip() == "":
-                        reasoning = message.get("reasoning_content", "")
-                        if reasoning:
-                            # Извлекаем только последнюю фразу, где есть ответ
-                            import re
-                            # Ищем "Ответ: ..." или просто берем последнее предложение
-                            match = re.search(r'Ответ[:\s]+([^.!?]*[.!?])', reasoning)
-                            if match:
-                                answer = match.group(1)
-                            else:
-                                # Берем последнее предложение
-                                sentences = [s for s in reasoning.split('.') if s.strip()]
-                                answer = sentences[-1].strip() + '.' if sentences else reasoning
+                        answer = message.get("reasoning_content", "")
+                        if answer:
+                            answer = clean_answer(answer)
+                            logger.info(f"🔄 Очистил reasoning_content: {answer}")
                     
                     if not answer or answer.strip() == "":
-                        answer = "Мой друг, я не могу найти ответ на этот вопрос."
+                        answer = "Не знаю."
+                    
+                    answer = clean_answer(answer)
                     
                     logger.info(f"✅ ОТВЕТ: {answer}")
                 else:
                     logger.error(f"❌ Ошибка API: {data}")
-                    answer = "Мой друг, у меня небольшие сложности. Переформулируйте вопрос."
+                    answer = "Ошибка."
 
     except asyncio.TimeoutError:
-        answer = "Мой друг, время не ждет! Задайте вопрос короче."
+        answer = "Время вышло."
     except Exception as e:
         logger.error(f"💥 Ошибка: {e}")
-        answer = "Весьма странно... Произошла ошибка. Попробуйте еще раз."
+        answer = "Ошибка."
+
+    # Финальная очистка от инструкций
+    if any(word in answer.lower() for word in ['инструкци', 'рассуждени', 'мысл', 'должен', 'нужно']):
+        sentences = [s.strip() for s in answer.split('.') if s.strip()]
+        if len(sentences) > 1:
+            answer = '. '.join(sentences[-2:]) + '.'
 
     sessions[session_id].append({"role": "assistant", "content": answer})
     
@@ -158,6 +206,3 @@ async def cleanup_sessions():
                 del sessions[session_id]
             if session_id in LAST_ACTIVITY:
                 del LAST_ACTIVITY[session_id]
-        
-        if to_delete:
-            logger.info(f"🧹 Очищено {len(to_delete)} старых сессий")
