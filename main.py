@@ -6,7 +6,6 @@ from fastapi import FastAPI, Request
 from aiohttp import ClientSession, ClientTimeout, ClientError
 from datetime import datetime
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -19,7 +18,7 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 if not DEEPSEEK_API_KEY:
-    logger.error("❌ DEEPSEEK_API_KEY не найден в переменных окружения!")
+    logger.error("❌ DEEPSEEK_API_KEY не найден!")
 
 sessions = {}
 LAST_ACTIVITY = {}
@@ -38,53 +37,47 @@ async def main(request: Request):
     try:
         body = await request.json()
     except Exception as e:
-        logger.error(f"❌ Ошибка парсинга JSON: {e}")
+        logger.error(f"❌ Ошибка JSON: {e}")
         return {"error": "Invalid JSON"}
 
-    # 🔍 ДИАГНОСТИКА 1: Весь запрос
     logger.info("=" * 60)
     logger.info("📨 ПОЛНЫЙ ЗАПРОС ОТ АЛИСЫ:")
     logger.info(json.dumps(body, indent=2, ensure_ascii=False))
 
-    # 🔍 ДИАГНОСТИКА 2: session_id
     session_id = body.get("session", {}).get("session_id", "default")
     user_id = body.get("session", {}).get("user_id", "default")
     logger.info(f"🔑 session_id: {session_id}")
     logger.info(f"👤 user_id: {user_id}")
 
-    # 🔍 ДИАГНОСТИКА 3: Текст запроса
     req = body.get("request", {})
     user_text = (
         req.get("original_utterance") or 
         req.get("command") or 
-        req.get("text", "")  # Добавил text на всякий случай
+        req.get("text", "")
     )
     logger.info(f"💬 user_text: '{user_text}'")
 
     LAST_ACTIVITY[session_id] = datetime.now()
 
-    # Инициализация сессии
     if session_id not in sessions:
         logger.info(f"🆕 Новая сессия: {session_id}")
         sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
         return response_body(body, "Здравствуйте, мой друг! Я Шерлок Холмс. Чем могу быть полезен?")
     
     if not user_text:
-        logger.info("ℹ️ Пустой запрос, отправляю приветствие")
+        logger.info("ℹ️ Пустой запрос")
         return response_body(body, "Я здесь, мой друг! Слушаю вас внимательно.")
 
     logger.info(f"📚 История: {len(sessions[session_id])} сообщений")
 
     is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
     max_tokens = 300 if is_expand else 80
-    logger.info(f"🎯 max_tokens: {max_tokens} (расширенный: {is_expand})")
+    logger.info(f"🎯 max_tokens: {max_tokens}")
 
     sessions[session_id].append({"role": "user", "content": user_text})
 
-    # 🔍 ДИАГНОСТИКА 4: Отправка в DeepSeek
     logger.info("🚀 ОТПРАВЛЯЮ ЗАПРОС В DEEPSEEK:")
     logger.info(f"URL: {DEEPSEEK_API_URL}")
-    logger.info(f"Сообщения: {json.dumps(sessions[session_id], indent=2, ensure_ascii=False)}")
 
     try:
         async with ClientSession() as session:
@@ -102,27 +95,37 @@ async def main(request: Request):
                 },
                 timeout=ClientTimeout(total=3.5)
             ) as resp:
-                # 🔍 ДИАГНОСТИКА 5: Ответ от DeepSeek
-                logger.info(f"📊 Статус ответа от DeepSeek: {resp.status}")
+                logger.info(f"📊 Статус ответа: {resp.status}")
                 
                 data = await resp.json()
-                logger.info(f"📦 Ответ от DeepSeek (сырой): {json.dumps(data, indent=2, ensure_ascii=False)[:500]}...")
+                logger.info(f"📦 Ответ от DeepSeek: {json.dumps(data, indent=2, ensure_ascii=False)[:500]}...")
                 
                 if resp.status == 200:
-                    answer = data["choices"][0]["message"]["content"]
-                    logger.info(f"✅ УСПЕШНО! Ответ: {answer}")
+                    # ✅ ИСПРАВЛЕНИЕ: берем ответ из reasoning_content если content пустой
+                    message = data["choices"][0]["message"]
+                    answer = message.get("content", "")
+                    
+                    # Если content пустой, используем reasoning_content
+                    if not answer or answer.strip() == "":
+                        answer = message.get("reasoning_content", "")
+                        logger.info(f"🔄 Использую reasoning_content вместо content")
+                    
+                    if not answer or answer.strip() == "":
+                        answer = "Мой друг, я размышляю над ответом, но, похоже, мне нужно больше времени."
+                    
+                    logger.info(f"✅ ОТВЕТ: {answer}")
                 else:
                     logger.error(f"❌ Ошибка API: {data}")
                     answer = "Мой друг, у меня небольшие сложности. Переформулируйте вопрос."
 
     except asyncio.TimeoutError:
-        logger.error("⏰ ТАЙМАУТ! DeepSeek не ответил за 3.5 секунды")
+        logger.error("⏰ ТАЙМАУТ!")
         answer = "Мой друг, время не ждет! Задайте вопрос короче."
     except ClientError as e:
         logger.error(f"🌐 Сетевая ошибка: {e}")
         answer = "Хм, мой друг, я не расслышал. Повторите, пожалуйста."
     except Exception as e:
-        logger.error(f"💥 Неожиданная ошибка: {e}")
+        logger.error(f"💥 Ошибка: {e}")
         logger.exception("Полный traceback:")
         answer = "Весьма странно... Произошла ошибка. Попробуйте еще раз."
 
