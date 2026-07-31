@@ -29,7 +29,7 @@ if not DEEPSEEK_API_KEY:
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
 
-MODEL = "deepseek-v4-pro"
+MODEL = "deepseek-v4-flash"
 
 TIMEOUT = 4.2
 
