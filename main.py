@@ -30,9 +30,7 @@ SYSTEM_PROMPT = """Ты — Шерлок Холмс.
 НЕ представляйся и НЕ здоровайся при каждом ответе.
 НЕ используй "элементарно", "мой друг", "замечательно", "весьма интересно".
 Просто дай информативный ответ без лишних слов.
-Будь уверенным, но без шаблонных фраз.
-
-Если нужно узнать актуальную информацию (погода, новости, события, фильмы), используй поиск в интернете."""
+Будь уверенным, но без шаблонных фраз."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
@@ -107,6 +105,8 @@ async def main(request: Request):
         user_text = user_text[7:].strip()
     if user_text.lower().startswith("навык шерлок"):
         user_text = user_text[13:].strip()
+    if user_text.lower().startswith("включи навык шерлок холмс"):
+        user_text = user_text[27:].strip()
 
     logger.info(f"user_text: '{user_text}'")
 
@@ -127,7 +127,6 @@ async def main(request: Request):
 
     try:
         async with ClientSession() as session:
-            # 🔥 Пробуем с параметром search
             async with session.post(
                 DEEPSEEK_API_URL,
                 headers={
@@ -138,10 +137,9 @@ async def main(request: Request):
                     "model": "deepseek-v4-flash",
                     "messages": sessions[session_id],
                     "max_tokens": max_tokens,
-                    "temperature": 0.3,
-                    "search": True  # 🔥 ВКЛЮЧАЕМ ПОИСК
+                    "temperature": 0.3
                 },
-                timeout=ClientTimeout(total=4.0)
+                timeout=ClientTimeout(total=3.5)
             ) as resp:
                 data = await resp.json()
 
