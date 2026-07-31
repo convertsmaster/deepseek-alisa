@@ -23,16 +23,12 @@ if not DEEPSEEK_API_KEY:
 sessions = {}
 LAST_ACTIVITY = {}
 
-# 🔥 НОВЫЙ СИСТЕМНЫЙ ПРОМПТ - явно просим НЕ рассуждать
 SYSTEM_PROMPT = """Ты — Шерлок Холмс, знаменитый сыщик из Викторианской Англии. 
-ОТВЕЧАЙ ТОЛЬКО ФИНАЛЬНЫМ ОТВЕТОМ, БЕЗ РАССУЖДЕНИЙ.
-По умолчанию отвечай КРАТКО, по сути, максимум 3-4 предложения. 
-ТОЛЬКО факты, без воды и лишних рассуждений. 
-Если пользователь просит 'разверни', 'подробнее', 'расскажи детальнее' или 'объясни полностью' — тогда отвечай развернуто, детально, но без воды. 
-Используй выражения: 'элементарно', 'замечательно', 'весьма интересно', 'дедукция'. 
-Обращайся 'мой друг'. Будь самоуверенным, но не многословным.
-
-ВАЖНО: НЕ ПОКАЗЫВАЙ СВОИ РАССУЖДЕНИЯ! ДАВАЙ ТОЛЬКО ГОТОВЫЙ ОТВЕТ!"""
+Отвечай ТОЛЬКО готовым ответом, БЕЗ каких-либо рассуждений, пояснений или мыслей вслух.
+Твой ответ должен быть кратким, максимум 3-4 предложения.
+Используй выражения: 'элементарно', 'замечательно', 'весьма интересно', 'дедукция'.
+Обращайся 'мой друг'.
+Если пользователь просит 'разверни', 'подробнее', 'расскажи детальнее' — тогда отвечай развернуто, но всё равно БЕЗ рассуждений."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
@@ -45,12 +41,8 @@ async def main(request: Request):
         return {"error": "Invalid JSON"}
 
     logger.info("=" * 60)
-    logger.info("📨 ПОЛНЫЙ ЗАПРОС ОТ АЛИСЫ:")
-    logger.info(json.dumps(body, indent=2, ensure_ascii=False))
 
     session_id = body.get("session", {}).get("session_id", "default")
-    user_id = body.get("session", {}).get("user_id", "default")
-    logger.info(f"🔑 session_id: {session_id}")
 
     req = body.get("request", {})
     user_text = (
@@ -70,15 +62,10 @@ async def main(request: Request):
     if not user_text:
         return response_body(body, "Я здесь, мой друг! Слушаю вас внимательно.")
 
-    logger.info(f"📚 История: {len(sessions[session_id])} сообщений")
-
     is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
-    max_tokens = 300 if is_expand else 80
-    logger.info(f"🎯 max_tokens: {max_tokens}")
+    max_tokens = 300 if is_expand else 150
 
     sessions[session_id].append({"role": "user", "content": user_text})
-
-    logger.info("🚀 ОТПРАВЛЯЮ ЗАПРОС В DEEPSEEK:")
 
     try:
         async with ClientSession() as session:
@@ -92,42 +79,36 @@ async def main(request: Request):
                     "model": "deepseek-v4-pro",
                     "messages": sessions[session_id],
                     "max_tokens": max_tokens,
-                    "temperature": 0.5,
-                    "reasoning_effort": "low"  # 🔥 УБИРАЕМ РАССУЖДЕНИЯ
+                    "temperature": 0.3,  # 🔥 Понизил температуру для более предсказуемых ответов
+                    "reasoning_effort": "minimal"  # 🔥 Минимум рассуждений
                 },
                 timeout=ClientTimeout(total=3.5)
             ) as resp:
-                logger.info(f"📊 Статус ответа: {resp.status}")
-                
                 data = await resp.json()
-                logger.info(f"📦 Ответ от DeepSeek: {json.dumps(data, indent=2, ensure_ascii=False)[:500]}...")
                 
                 if resp.status == 200:
                     message = data["choices"][0]["message"]
                     
-                    # ✅ Сначала пробуем content
+                    # 🔥 Берем ТОЛЬКО content, игнорируем reasoning_content
                     answer = message.get("content", "")
                     
-                    # Если content пустой, используем reasoning_content, но обрезаем рассуждения
+                    # Если content пустой - пробуем извлечь из reasoning_content
                     if not answer or answer.strip() == "":
                         reasoning = message.get("reasoning_content", "")
                         if reasoning:
-                            # 🔥 Извлекаем только финальный ответ из рассуждений
-                            # Ищем последнее предложение с ответом
-                            lines = reasoning.split('\n')
-                            # Берем последнюю строку, которая содержит ответ
-                            for line in reversed(lines):
-                                if "Ответ:" in line or "ответ:" in line:
-                                    answer = line.split("Ответ:")[-1].strip()
-                                    break
-                            if not answer:
-                                # Если не нашли "Ответ:", берем последнее предложение
-                                sentences = reasoning.split('.')
-                                answer = sentences[-1].strip() if sentences else reasoning
-                            logger.info(f"🔄 Извлек ответ из reasoning: {answer}")
+                            # Извлекаем только последнюю фразу, где есть ответ
+                            import re
+                            # Ищем "Ответ: ..." или просто берем последнее предложение
+                            match = re.search(r'Ответ[:\s]+([^.!?]*[.!?])', reasoning)
+                            if match:
+                                answer = match.group(1)
+                            else:
+                                # Берем последнее предложение
+                                sentences = [s for s in reasoning.split('.') if s.strip()]
+                                answer = sentences[-1].strip() + '.' if sentences else reasoning
                     
                     if not answer or answer.strip() == "":
-                        answer = "Мой друг, я размышляю над ответом, но, похоже, мне нужно больше времени."
+                        answer = "Мой друг, я не могу найти ответ на этот вопрос."
                     
                     logger.info(f"✅ ОТВЕТ: {answer}")
                 else:
@@ -135,14 +116,9 @@ async def main(request: Request):
                     answer = "Мой друг, у меня небольшие сложности. Переформулируйте вопрос."
 
     except asyncio.TimeoutError:
-        logger.error("⏰ ТАЙМАУТ!")
         answer = "Мой друг, время не ждет! Задайте вопрос короче."
-    except ClientError as e:
-        logger.error(f"🌐 Сетевая ошибка: {e}")
-        answer = "Хм, мой друг, я не расслышал. Повторите, пожалуйста."
     except Exception as e:
         logger.error(f"💥 Ошибка: {e}")
-        logger.exception("Полный traceback:")
         answer = "Весьма странно... Произошла ошибка. Попробуйте еще раз."
 
     sessions[session_id].append({"role": "assistant", "content": answer})
