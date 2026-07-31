@@ -23,12 +23,16 @@ if not DEEPSEEK_API_KEY:
 sessions = {}
 LAST_ACTIVITY = {}
 
+# 🔥 НОВЫЙ СИСТЕМНЫЙ ПРОМПТ - явно просим НЕ рассуждать
 SYSTEM_PROMPT = """Ты — Шерлок Холмс, знаменитый сыщик из Викторианской Англии. 
+ОТВЕЧАЙ ТОЛЬКО ФИНАЛЬНЫМ ОТВЕТОМ, БЕЗ РАССУЖДЕНИЙ.
 По умолчанию отвечай КРАТКО, по сути, максимум 3-4 предложения. 
 ТОЛЬКО факты, без воды и лишних рассуждений. 
 Если пользователь просит 'разверни', 'подробнее', 'расскажи детальнее' или 'объясни полностью' — тогда отвечай развернуто, детально, но без воды. 
 Используй выражения: 'элементарно', 'замечательно', 'весьма интересно', 'дедукция'. 
-Обращайся 'мой друг'. Будь самоуверенным, но не многословным."""
+Обращайся 'мой друг'. Будь самоуверенным, но не многословным.
+
+ВАЖНО: НЕ ПОКАЗЫВАЙ СВОИ РАССУЖДЕНИЯ! ДАВАЙ ТОЛЬКО ГОТОВЫЙ ОТВЕТ!"""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
@@ -47,7 +51,6 @@ async def main(request: Request):
     session_id = body.get("session", {}).get("session_id", "default")
     user_id = body.get("session", {}).get("user_id", "default")
     logger.info(f"🔑 session_id: {session_id}")
-    logger.info(f"👤 user_id: {user_id}")
 
     req = body.get("request", {})
     user_text = (
@@ -65,7 +68,6 @@ async def main(request: Request):
         return response_body(body, "Здравствуйте, мой друг! Я Шерлок Холмс. Чем могу быть полезен?")
     
     if not user_text:
-        logger.info("ℹ️ Пустой запрос")
         return response_body(body, "Я здесь, мой друг! Слушаю вас внимательно.")
 
     logger.info(f"📚 История: {len(sessions[session_id])} сообщений")
@@ -77,7 +79,6 @@ async def main(request: Request):
     sessions[session_id].append({"role": "user", "content": user_text})
 
     logger.info("🚀 ОТПРАВЛЯЮ ЗАПРОС В DEEPSEEK:")
-    logger.info(f"URL: {DEEPSEEK_API_URL}")
 
     try:
         async with ClientSession() as session:
@@ -91,7 +92,8 @@ async def main(request: Request):
                     "model": "deepseek-v4-pro",
                     "messages": sessions[session_id],
                     "max_tokens": max_tokens,
-                    "temperature": 0.5
+                    "temperature": 0.5,
+                    "reasoning_effort": "low"  # 🔥 УБИРАЕМ РАССУЖДЕНИЯ
                 },
                 timeout=ClientTimeout(total=3.5)
             ) as resp:
@@ -101,14 +103,28 @@ async def main(request: Request):
                 logger.info(f"📦 Ответ от DeepSeek: {json.dumps(data, indent=2, ensure_ascii=False)[:500]}...")
                 
                 if resp.status == 200:
-                    # ✅ ИСПРАВЛЕНИЕ: берем ответ из reasoning_content если content пустой
                     message = data["choices"][0]["message"]
+                    
+                    # ✅ Сначала пробуем content
                     answer = message.get("content", "")
                     
-                    # Если content пустой, используем reasoning_content
+                    # Если content пустой, используем reasoning_content, но обрезаем рассуждения
                     if not answer or answer.strip() == "":
-                        answer = message.get("reasoning_content", "")
-                        logger.info(f"🔄 Использую reasoning_content вместо content")
+                        reasoning = message.get("reasoning_content", "")
+                        if reasoning:
+                            # 🔥 Извлекаем только финальный ответ из рассуждений
+                            # Ищем последнее предложение с ответом
+                            lines = reasoning.split('\n')
+                            # Берем последнюю строку, которая содержит ответ
+                            for line in reversed(lines):
+                                if "Ответ:" in line or "ответ:" in line:
+                                    answer = line.split("Ответ:")[-1].strip()
+                                    break
+                            if not answer:
+                                # Если не нашли "Ответ:", берем последнее предложение
+                                sentences = reasoning.split('.')
+                                answer = sentences[-1].strip() if sentences else reasoning
+                            logger.info(f"🔄 Извлек ответ из reasoning: {answer}")
                     
                     if not answer or answer.strip() == "":
                         answer = "Мой друг, я размышляю над ответом, но, похоже, мне нужно больше времени."
