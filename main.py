@@ -132,7 +132,7 @@ async def main(request: Request):
                     "Content-Type": "application/json"
                 },
                 json={
-                    "model": "deepseek-v4-flash",
+                    "model": "deepseek-v4-flash-search",  # 🔥 С ПОИСКОМ В ИНТЕРНЕТЕ
                     "messages": sessions[session_id],
                     "max_tokens": max_tokens,
                     "temperature": 0.3
