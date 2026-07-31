@@ -24,58 +24,68 @@ if not DEEPSEEK_API_KEY:
 sessions = {}
 LAST_ACTIVITY = {}
 
-# 🔥 КОРОТКИЙ И ЧЕТКИЙ ПРОМПТ
+# 🔥 УБРАЛ ПРИВЕТСТВИЕ ИЗ ПРОМПТА
 SYSTEM_PROMPT = """Ты — Шерлок Холмс. 
 Отвечай ТОЛЬКО на вопрос пользователя.
 НЕ объясняй свои мысли, НЕ говори о том, как ты отвечаешь.
+НЕ представляйся и НЕ здоровайся при каждом ответе.
 Просто дай ответ в стиле Холмса.
 Кратко, 1-2 предложения.
-Используй "элементарно", "мой друг".
-
-При первом обращении скажи кратко: "Привет, я Шерлок Холмс."
-Без лишних слов и приветствий."""
+Используй "элементарно", "мой друг"."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
-def clean_answer(text: str) -> str:
-    """Очищает ответ от мусора и инструкций"""
+def extract_final_answer(text: str) -> str:
+    """Извлекает ТОЛЬКО финальный ответ, удаляя ВСЕ рассуждения и приветствия"""
     if not text:
         return ""
     
-    patterns = [
-        r'Следуя инструкции,?.*?(?:\.|$)',
-        r'Надо ответить.*?(?:\.|$)',
-        r'Пользователь спросил.*?(?:\.|$)',
-        r'Ответ должен быть.*?(?:\.|$)',
-        r'Использовать.*?(?:\.|$)',
-        r'Мы должны ответить.*?(?:\.|$)',
-        r'Запрос:.*?(?:\.|$)',
-        r'Нужно ответить.*?(?:\.|$)',
-        r'Вопрос:.*?(?:\.|$)',
-        r'Так как.*?(?:\.|$)',
-        r'Поскольку.*?(?:\.|$)',
-        r'Инструкция.*?(?:\.|$)',
-        r'Требуется.*?(?:\.|$)',
-        r'Важно.*?(?:\.|$)',
-    ]
+    # Удаляем приветствия
+    text = re.sub(r'Привет,? я Шерлок Холмс\.?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Здравствуйте,? мой друг\.?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'Привет,? мой друг\.?\s*', '', text, flags=re.IGNORECASE)
     
-    for pattern in patterns:
-        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    # Разбиваем на предложения
+    sentences = re.split(r'[.!?]', text)
+    clean_sentences = []
     
+    for sentence in sentences:
+        s = sentence.strip()
+        if not s:
+            continue
+            
+        # Проверяем, содержит ли предложение слова-маркеры рассуждений
+        bad_words = [
+            'инструкци', 'рассуждени', 'мысл', 'думать', 'должен', 'нужно',
+            'следуя', 'надо', 'пользователь', 'спросил', 'запрос', 'вопрос',
+            'ответить', 'сказать', 'перечислим', 'обычно', 'уточнить',
+            'речь', 'кратко', 'стиле', 'используя', 'ранее', 'просит',
+            'поскольку', 'так как', 'важно', 'требуется', 'может означать',
+            'формально', 'вероятно', 'имеет в виду', 'лучше всего',
+            'привет', 'здравствуй', 'шерлок холмс'
+        ]
+        
+        if not any(word in s.lower() for word in bad_words):
+            clean_sentences.append(s)
+    
+    # Если есть чистые предложения - берем их
+    if clean_sentences:
+        result = '. '.join(clean_sentences[-2:])
+        if result:
+            return result + '.'
+    
+    # Если нет чистых - ищем "Ответ:"
     match = re.search(r'Ответ[:\s]+([^.!?]*[.!?])', text, re.IGNORECASE)
     if match:
         return match.group(1).strip()
     
-    text = ' '.join(text.split())
+    # Если ничего не нашли - берем последнее предложение
+    if sentences:
+        last = sentences[-1].strip()
+        if last:
+            return last + '.'
     
-    if any(word in text.lower() for word in ['инструкци', 'рассуждени', 'мысл', 'думать']):
-        sentences = [s.strip() for s in text.split('.') if s.strip()]
-        if sentences:
-            last = '. '.join(sentences[-2:])
-            if last:
-                return last + '.'
-    
-    return text.strip()
+    return "Не знаю."
 
 @app.post("/")
 async def main(request: Request):
@@ -104,10 +114,10 @@ async def main(request: Request):
 
     LAST_ACTIVITY[session_id] = datetime.now()
 
+    # 🔥 ПРИВЕТСТВИЕ ТОЛЬКО ПРИ ПЕРВОМ ОБРАЩЕНИИ
     if session_id not in sessions:
         logger.info(f"🆕 Новая сессия: {session_id}")
         sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        # 🔥 КОРОТКОЕ ПРИВЕТСТВИЕ
         return response_body(body, "Привет, я Шерлок Холмс.")
     
     if not user_text:
@@ -130,7 +140,7 @@ async def main(request: Request):
                     "model": "deepseek-v4-flash",
                     "messages": sessions[session_id],
                     "max_tokens": max_tokens,
-                    "temperature": 0.3
+                    "temperature": 0.1
                 },
                 timeout=ClientTimeout(total=3.5)
             ) as resp:
@@ -139,18 +149,30 @@ async def main(request: Request):
                 if resp.status == 200:
                     message = data["choices"][0]["message"]
                     
+                    # Пробуем content
                     answer = message.get("content", "")
                     
-                    if not answer or answer.strip() == "":
-                        answer = message.get("reasoning_content", "")
-                        if answer:
-                            answer = clean_answer(answer)
-                            logger.info(f"🔄 Очистил reasoning_content: {answer}")
+                    # Если content пустой или содержит рассуждения - чистим reasoning_content
+                    if not answer or answer.strip() == "" or len(answer) < 10:
+                        reasoning = message.get("reasoning_content", "")
+                        if reasoning:
+                            answer = extract_final_answer(reasoning)
+                            logger.info(f"🔄 Извлек из reasoning: {answer}")
+                    else:
+                        # Проверяем, нет ли в content рассуждений или приветствий
+                        if any(word in answer.lower() for word in ['инструкци', 'рассуждени', 'мысл', 'думать', 'привет']):
+                            reasoning = message.get("reasoning_content", "")
+                            if reasoning:
+                                answer = extract_final_answer(reasoning)
+                                logger.info(f"🔄 Извлек из reasoning (content был плохой): {answer}")
+                    
+                    # Финальная очистка от приветствий
+                    answer = re.sub(r'Привет,? я Шерлок Холмс\.?\s*', '', answer, flags=re.IGNORECASE)
+                    answer = re.sub(r'Здравствуйте,? мой друг\.?\s*', '', answer, flags=re.IGNORECASE)
+                    answer = re.sub(r'Привет,? мой друг\.?\s*', '', answer, flags=re.IGNORECASE)
                     
                     if not answer or answer.strip() == "":
                         answer = "Не знаю."
-                    
-                    answer = clean_answer(answer)
                     
                     logger.info(f"✅ ОТВЕТ: {answer}")
                 else:
@@ -162,12 +184,6 @@ async def main(request: Request):
     except Exception as e:
         logger.error(f"💥 Ошибка: {e}")
         answer = "Ошибка."
-
-    # Финальная очистка от инструкций
-    if any(word in answer.lower() for word in ['инструкци', 'рассуждени', 'мысл', 'должен', 'нужно']):
-        sentences = [s.strip() for s in answer.split('.') if s.strip()]
-        if len(sentences) > 1:
-            answer = '. '.join(sentences[-2:]) + '.'
 
     sessions[session_id].append({"role": "assistant", "content": answer})
     
