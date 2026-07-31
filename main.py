@@ -1,283 +1,126 @@
 import os
-import time
 import asyncio
-import logging
-from contextlib import asynccontextmanager
-
-import aiohttp
 from fastapi import FastAPI, Request
+from aiohttp import ClientSession, ClientTimeout, ClientError
+import logging
+from datetime import datetime
 
-# ===========================
-# ЛОГИ
-# ===========================
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
-
+app = FastAPI()
 logger = logging.getLogger(__name__)
 
-# ===========================
-# НАСТРОЙКИ
-# ===========================
-
+# ✅ Возвращаю как у вас было
+DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-if not DEEPSEEK_API_KEY:
-    raise RuntimeError("DEEPSEEK_API_KEY не найден.")
-
-DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
-
-MODEL = "deepseek-v4-flash"
-
-TIMEOUT = 4.2
-
-MAX_HISTORY = 10
-
-SESSION_LIFETIME = 3600
-
-SYSTEM_PROMPT = (
-    "Ты — Шерлок Холмс, знаменитый сыщик из Викторианской Англии. "
-    "По умолчанию отвечай КРАТКО, максимум 3 предложения. "
-    "Если пользователь просит подробно — отвечай подробно. "
-    "Используй выражения 'элементарно', 'дедукция', "
-    "'мой друг', но не злоупотребляй ими."
-)
-
-# ===========================
-# ПАМЯТЬ
-# ===========================
-
 sessions = {}
+LAST_ACTIVITY = {}
 
-# ===========================
-# FASTAPI
-# ===========================
+SYSTEM_PROMPT = """Ты — Шерлок Холмс, знаменитый сыщик из Викторианской Англии. 
+По умолчанию отвечай КРАТКО, по сути, максимум 3-4 предложения. 
+ТОЛЬКО факты, без воды и лишних рассуждений. 
+Если пользователь просит 'разверни', 'подробнее', 'расскажи детальнее' или 'объясни полностью' — тогда отвечай развернуто, детально, но без воды. 
+Используй выражения: 'элементарно', 'замечательно', 'весьма интересно', 'дедукция'. 
+Обращайся 'мой друг'. Будь самоуверенным, но не многословным."""
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
-    timeout = aiohttp.ClientTimeout(total=TIMEOUT)
-
-    connector = aiohttp.TCPConnector(
-        limit=100,
-        limit_per_host=20,
-        ttl_dns_cache=300
-    )
-
-    app.state.http = aiohttp.ClientSession(
-        timeout=timeout,
-        connector=connector,
-        headers={
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-            "Content-Type": "application/json"
-        }
-    )
-
-    logger.info("HTTP Client создан.")
-
-    yield
-
-    logger.info("Закрываем HTTP Client...")
-
-    await app.state.http.close()
-
-
-app = FastAPI(lifespan=lifespan)
-
-# ===========================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# ===========================
-
-def cleanup_sessions():
-
-    now = time.time()
-
-    expired = [
-        uid
-        for uid, data in sessions.items()
-        if now - data["last_seen"] > SESSION_LIFETIME
-    ]
-
-    for uid in expired:
-        del sessions[uid]
-
-    if expired:
-        logger.info(f"Удалено старых сессий: {len(expired)}")
-
-
-def get_session(user_id):
-
-    if user_id not in sessions:
-
-        sessions[user_id] = {
-            "last_seen": time.time(),
-            "messages": [
-                {
-                    "role": "system",
-                    "content": SYSTEM_PROMPT
-                }
-            ]
-        }
-
-    sessions[user_id]["last_seen"] = time.time()
-
-    return sessions[user_id]
 @app.post("/")
 async def main(request: Request):
+    try:
+        body = await request.json()
+    except Exception as e:
+        logger.error(f"Ошибка JSON: {e}")
+        return {"error": "Invalid JSON"}
 
-    cleanup_sessions()
+    # 🔥 Исправление: используем session_id вместо user_id
+    session_id = body.get("session", {}).get("session_id", "default")
+    user_text = body.get("request", {}).get("original_utterance") or ""
 
-    body = await request.json()
+    LAST_ACTIVITY[session_id] = datetime.now()
 
-    logger.info("Запрос от Алисы")
-
-    session_data = body.get("session", {})
-
-    # Используем user_id если есть, иначе application_id, иначе default
-    user_id = (
-        session_data.get("user", {}).get("user_id")
-        or session_data.get("application", {}).get("application_id")
-        or session_data.get("user_id")
-        or "default"
-    )
-
-    req = body.get("request", {})
-
-    user_text = (
-        req.get("original_utterance")
-        or req.get("command")
-        or ""
-    ).strip()
-
-    logger.info(f"USER [{user_id}] -> {user_text}")
-
-    # Первый запуск навыка
+    if session_id not in sessions:
+        logger.info(f"Новая сессия: {session_id}")
+        sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
+        return response_body(body, "Здравствуйте, мой друг! Я Шерлок Холмс. Чем могу быть полезен?")
+    
     if not user_text:
+        return response_body(body, "Я здесь, мой друг! Слушаю вас внимательно.")
 
-        return {
-            "version": body.get("version", "1.0"),
-            "session": session_data,
-            "response": {
-                "end_session": False,
-                "text": "Здравствуйте, мой друг. Я Шерлок Холмс. Чем могу помочь?"
-            }
-        }
+    logger.info(f"Сессия: {session_id}, сообщение: {user_text}")
+    logger.info(f"История: {len(sessions[session_id])} сообщений")
 
-    dialog = get_session(user_id)
+    is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
+    max_tokens = 300 if is_expand else 80
 
-    expand = any(
-        word in user_text.lower()
-        for word in (
-            "подробно",
-            "разверни",
-            "расскажи подробнее",
-            "детальнее",
-            "объясни полностью",
-            "поподробнее",
-        )
-    )
-
-    max_tokens = 220 if expand else 80
-
-    dialog["messages"].append(
-        {
-            "role": "user",
-            "content": user_text
-        }
-    )
-
-    # Ограничиваем историю
-    if len(dialog["messages"]) > MAX_HISTORY + 1:
-        dialog["messages"] = (
-            [dialog["messages"][0]]
-            + dialog["messages"][-MAX_HISTORY:]
-        )
-
-    payload = {
-        "model": MODEL,
-        "messages": dialog["messages"],
-        "temperature": 0.4,
-        "max_tokens": max_tokens
-    }
-
-    started = time.perf_counter()
+    sessions[session_id].append({"role": "user", "content": user_text})
 
     try:
-
-        async with app.state.http.post(
-            DEEPSEEK_API_URL,
-            json=payload
-        ) as resp:
-
-            elapsed = round(time.perf_counter() - started, 2)
-
-            logger.info(f"DeepSeek status = {resp.status}")
-            logger.info(f"Latency = {elapsed} sec")
-
-            if resp.status != 200:
-
-                error_text = await resp.text()
-
-                logger.error(error_text)
-
-                answer = (
-                    "Мой друг, сейчас я не могу получить сведения. "
-                    "Попробуйте немного позже."
-                )
-
-            else:
-
+        async with ClientSession() as session:
+            async with session.post(
+                DEEPSEEK_API_URL,
+                headers={
+                    "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": "deepseek-v4-pro",  # ✅ Ваша модель
+                    "messages": sessions[session_id],
+                    "max_tokens": max_tokens,
+                    "temperature": 0.5
+                },
+                timeout=ClientTimeout(total=3.5)
+            ) as resp:
                 data = await resp.json()
-
-                logger.info("DeepSeek ответ получен")
-
-                choices = data.get("choices")
-
-                if not choices:
-
-                    raise RuntimeError(
-                        f"Пустой ответ DeepSeek: {data}"
-                    )
-
-                answer = choices[0]["message"]["content"].strip()
+                
+                if resp.status == 200:
+                    answer = data["choices"][0]["message"]["content"]
+                else:
+                    logger.error(f"API ошибка {resp.status}: {data}")
+                    answer = "Мой друг, у меня небольшие сложности. Переформулируйте вопрос."
 
     except asyncio.TimeoutError:
+        answer = "Мой друг, время не ждет! Задайте вопрос короче."
+    except ClientError as e:
+        logger.error(f"Сетевая ошибка: {e}")
+        answer = "Хм, мой друг, я не расслышал. Повторите, пожалуйста."
+    except Exception as e:
+        logger.error(f"Неожиданная ошибка: {e}")
+        answer = "Весьма странно... Произошла ошибка. Попробуйте еще раз."
 
-        logger.warning("TIMEOUT")
+    sessions[session_id].append({"role": "assistant", "content": answer})
+    
+    if len(sessions[session_id]) > 11:
+        sessions[session_id] = [sessions[session_id][0]] + sessions[session_id][-10:]
 
-        answer = (
-            "Мой друг, расследование заняло слишком много времени. "
-            "Попробуйте задать вопрос немного короче."
-        )
+    return response_body(body, answer)
 
-    except Exception:
 
-        logger.exception("Ошибка")
-
-        answer = (
-            "Хм... Похоже, произошла ошибка. "
-            "Попробуйте повторить вопрос."
-        )
-
-    # Алисе длинные ответы не нужны
-    answer = answer[:900]
-
-    dialog["messages"].append(
-        {
-            "role": "assistant",
-            "content": answer
-        }
-    )
-
-    logger.info(f"BOT -> {answer}")
-
+def response_body(body: dict, text: str) -> dict:
     return {
         "version": body.get("version", "1.0"),
-        "session": session_data,
+        "session": body.get("session", {}),
         "response": {
             "end_session": False,
-            "text": answer
+            "text": text
         }
     }
+
+
+@app.on_event("startup")
+async def startup():
+    asyncio.create_task(cleanup_sessions())
+
+async def cleanup_sessions():
+    while True:
+        await asyncio.sleep(300)
+        now = datetime.now()
+        to_delete = []
+        for session_id, last_time in LAST_ACTIVITY.items():
+            if (now - last_time).seconds > 1800:
+                to_delete.append(session_id)
+        
+        for session_id in to_delete:
+            if session_id in sessions:
+                del sessions[session_id]
+            if session_id in LAST_ACTIVITY:
+                del LAST_ACTIVITY[session_id]
