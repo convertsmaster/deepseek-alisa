@@ -6,6 +6,7 @@ import re
 from fastapi import FastAPI, Request
 from aiohttp import ClientSession, ClientTimeout, ClientError
 from datetime import datetime
+from tavily import TavilyClient
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -17,6 +18,10 @@ app = FastAPI()
 
 DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+
+# 🔥 ТВОЙ КЛЮЧ TAVILY
+TAVILY_API_KEY = "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"
+tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
 if not DEEPSEEK_API_KEY:
     logger.error("DEEPSEEK_API_KEY не найден!")
@@ -30,9 +35,18 @@ SYSTEM_PROMPT = """Ты — Шерлок Холмс.
 НЕ представляйся и НЕ здоровайся при каждом ответе.
 НЕ используй "элементарно", "мой друг", "замечательно", "весьма интересно".
 Просто дай информативный ответ без лишних слов.
-Будь уверенным, но без шаблонных фраз."""
+Будь уверенным, но без шаблонных фраз.
+
+Если пользователь спрашивает про актуальные события (погода, новости, фильмы, события), используй информацию из поиска."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
+
+# 🔥 КЛЮЧЕВЫЕ СЛОВА ДЛЯ ПОИСКА
+SEARCH_KEYWORDS = [
+    "погода", "новости", "сегодня", "завтра", "вчера", "фильм", "кино",
+    "концерт", "событие", "курс", "биткоин", "доллар", "евро",
+    "выборы", "президент", "война", "авария", "катастрофа"
+]
 
 def extract_final_answer(text: str) -> str:
     if not text:
@@ -84,6 +98,42 @@ def extract_final_answer(text: str) -> str:
 
     return "Не знаю."
 
+# 🔥 ФУНКЦИЯ ПОИСКА ЧЕРЕЗ TAVILY
+async def search_with_tavily(query: str) -> str:
+    """Ищет в интернете через Tavily и возвращает результаты."""
+    try:
+        response = tavily_client.search(
+            query=query,
+            max_results=5,
+            search_depth="basic",
+            include_answer=True
+        )
+        
+        # Если Tavily дал готовый ответ
+        if response.get("answer"):
+            logger.info(f"Tavily вернул готовый ответ: {response['answer'][:100]}...")
+            return response["answer"]
+        
+        # Иначе собираем результаты
+        results = response.get("results", [])
+        if not results:
+            return None
+        
+        context_parts = []
+        for r in results[:5]:
+            content = r.get("content", "")
+            if content:
+                context_parts.append(content)
+        
+        if context_parts:
+            return ". ".join(context_parts)
+        
+        return None
+        
+    except Exception as e:
+        logger.error(f"Ошибка поиска Tavily: {e}")
+        return None
+
 @app.post("/")
 async def main(request: Request):
     try:
@@ -105,6 +155,8 @@ async def main(request: Request):
         user_text = user_text[7:].strip()
     if user_text.lower().startswith("навык шерлок"):
         user_text = user_text[13:].strip()
+    if user_text.lower().startswith("включи навык шерлок холмс"):
+        user_text = user_text[27:].strip()
 
     logger.info(f"user_text: '{user_text}'")
 
@@ -118,8 +170,26 @@ async def main(request: Request):
     if not user_text:
         return response_body(body, "Слушаю.")
 
+    # 🔥 ПРОВЕРЯЕМ, НУЖЕН ЛИ ПОИСК
+    needs_search = any(kw in user_text.lower() for kw in SEARCH_KEYWORDS)
+    search_result = None
+    
+    if needs_search:
+        logger.info(f"🔍 Поиск в интернете для: {user_text}")
+        search_result = await search_with_tavily(user_text)
+        if search_result:
+            enhanced_text = f"""Вопрос пользователя: {user_text}
+
+Актуальная информация из интернета:
+{search_result}
+
+Ответь на вопрос пользователя на основе этой информации. 
+Если информации недостаточно, скажи об этом честно."""
+            user_text = enhanced_text
+            logger.info(f"✅ Поиск выполнен, данные добавлены в запрос")
+
     is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
-    max_tokens = 1000 if is_expand else 700
+    max_tokens = 700 if is_expand else 500
 
     sessions[session_id].append({"role": "user", "content": user_text})
 
@@ -137,7 +207,7 @@ async def main(request: Request):
                     "max_tokens": max_tokens,
                     "temperature": 0.3
                 },
-                timeout=ClientTimeout(total=4.0)
+                timeout=ClientTimeout(total=3.5)
             ) as resp:
                 data = await resp.json()
 
