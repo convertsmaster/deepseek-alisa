@@ -208,7 +208,7 @@ async def search_with_tavily(query: str) -> str:
     try:
         response = await tavily_client.search(
             query=query,
-            max_results=5,
+            max_results=3,  # 🔥 ТЕПЕРЬ 3 ВЫДАЧИ (было 5)
             search_depth="basic",
             include_answer=True
         )
@@ -222,7 +222,7 @@ async def search_with_tavily(query: str) -> str:
             return None
         
         context_parts = []
-        for r in results[:5]:
+        for r in results[:3]:  # 🔥 ТОЖЕ БЕРЁМ ТОЛЬКО 3
             content = r.get("content", "")
             if content:
                 context_parts.append(content)
