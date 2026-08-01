@@ -105,8 +105,6 @@ async def main(request: Request):
         user_text = user_text[7:].strip()
     if user_text.lower().startswith("навык шерлок"):
         user_text = user_text[13:].strip()
-    if user_text.lower().startswith("включи навык шерлок холмс"):
-        user_text = user_text[27:].strip()
 
     logger.info(f"user_text: '{user_text}'")
 
@@ -121,7 +119,7 @@ async def main(request: Request):
         return response_body(body, "Слушаю.")
 
     is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
-    max_tokens = 700 if is_expand else 500
+    max_tokens = 1000 if is_expand else 700
 
     sessions[session_id].append({"role": "user", "content": user_text})
 
@@ -139,7 +137,7 @@ async def main(request: Request):
                     "max_tokens": max_tokens,
                     "temperature": 0.3
                 },
-                timeout=ClientTimeout(total=3.5)
+                timeout=ClientTimeout(total=4.0)
             ) as resp:
                 data = await resp.json()
 
