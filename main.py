@@ -6,7 +6,7 @@ import re
 from fastapi import FastAPI, Request
 from aiohttp import ClientSession, ClientTimeout, ClientError
 from datetime import datetime
-from tavily import TavilyClient
+from tavily import AsyncTavilyClient
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -20,7 +20,7 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 TAVILY_API_KEY = "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"
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+tavily_client = AsyncTavilyClient(api_key=TAVILY_API_KEY)
 
 if not DEEPSEEK_API_KEY:
     logger.error("DEEPSEEK_API_KEY не найден!")
@@ -29,14 +29,14 @@ sessions = {}
 LAST_ACTIVITY = {}
 
 SYSTEM_PROMPT = """Ты — Шерлок Холмс.
-Отвечай развернуто, но по делу. 3-5 предложений.
-НЕ объясняй свои мысли, НЕ говори о том, как ты отвечаешь.
-НЕ представляйся и НЕ здоровайся при каждом ответе.
-НЕ используй "элементарно", "мой друг", "замечательно", "весьма интересно".
-Просто дай информативный ответ без лишних слов.
-Будь уверенным, но без шаблонных фраз.
-
-Если пользователь спрашивает про актуальные события (погода, новости, фильмы, события), используй информацию из поиска."""
+Отвечай ТОЛЬКО готовым ответом, БЕЗ объяснений своих мыслей.
+НЕ говори, что ты думаешь. НЕ говори о том, как ты отвечаешь.
+Дай краткий и полезный ответ (3-5 предложений).
+Если пользователь просит рецепт — дай рецепт.
+Если просит информацию из интернета — используй её.
+НЕ добавляй лишних слов. НЕ используй "элементарно", "мой друг", "замечательно".
+Просто ответь по делу. Без рассуждений. Без пояснений. Без вступлений.
+Если не знаешь — скажи "Не знаю"."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
@@ -54,6 +54,58 @@ def extract_final_answer(text: str) -> str:
     if not text:
         return ""
 
+    # Удаляем мусорные паттерны
+    garbage_patterns = [
+        r'Мы должны ответить.*?\.',
+        r'Пользователь просит.*?\.',
+        r'Нужно дать.*?\.',
+        r'Но мы должны.*?\.',
+        r'Ответ:.*?\.',
+        r'Рецепт:.*?\.',
+        r'But we must.*?\.',
+        r'We need to parse.*?\.',
+        r'This is Russian.*?\.',
+        r'Could be.*?\.',
+        r'Maybe.*?\.',
+        r'Alternatively.*?\.',
+        r'I think.*?\.',
+        r'Let\'s think.*?\.',
+        r'As Sherlock Holmes.*?\.',
+        r'Probably.*?\.',
+        r'Likely.*?\.',
+        r'Essentially.*?\.',
+        r'Basically.*?\.',
+        r'In other words.*?\.',
+        r'That said.*?\.',
+        r'Having said that.*?\.',
+        r'To clarify.*?\.',
+        r'For example.*?\.',
+        r'For instance.*?\.',
+        r'Я — Шерлок Холмс.*?\.',
+        r'консультант-детектив.*?\.',
+        r'Если вы имели в виду.*?\.',
+        r'уточните, пожалуйста.*?\.',
+        r'Иначе я готов рассмотреть.*?\.',
+        r'как загадку.*?\.',
+        r'которую нужно разгадать.*?\.',
+        r'Думаю, что.*?\.',
+        r'По моему мнению.*?\.',
+        r'Я считаю.*?\.',
+        r'Мне кажется.*?\.',
+        r'Вероятно.*?\.',
+        r'Возможно.*?\.',
+        r'Наверное.*?\.',
+        r'Скорее всего.*?\.',
+        r'но это было от прошлой модели.*?\.',
+        r'Сейчас мы должны дать нормальный ответ.*?\.',
+        r'Я готов.*?\.',
+        r'Мне нужно.*?\.',
+        r'Я предполагаю.*?\.',
+    ]
+    for pattern in garbage_patterns:
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL)
+
+    # Удаляем шаблонные фразы
     text = re.sub(r'Привет,? я Шерлок Холмс\.?\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'Здравствуйте,? мой друг\.?\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'Привет,? мой друг\.?\s*', '', text, flags=re.IGNORECASE)
@@ -63,35 +115,46 @@ def extract_final_answer(text: str) -> str:
     text = re.sub(r'Весьма интересно,?\s*', '', text, flags=re.IGNORECASE)
     text = re.sub(r'Дедукция,?\s*', '', text, flags=re.IGNORECASE)
 
+    # Разбиваем на предложения
     sentences = re.split(r'[.!?]', text)
     clean_sentences = []
+
+    # Плохие слова
+    bad_words = [
+        'инструкци', 'рассуждени', 'мысл', 'думать', 'должен', 'нужно',
+        'следуя', 'надо', 'пользователь', 'спросил', 'запрос', 'вопрос',
+        'ответить', 'сказать', 'перечислим', 'обычно', 'уточнить',
+        'речь', 'кратко', 'стиле', 'используя', 'ранее', 'просит',
+        'поскольку', 'так как', 'важно', 'требуется', 'может означать',
+        'формально', 'вероятно', 'имеет в виду', 'лучше всего',
+        'привет', 'здравствуй', 'шерлок холмс', 'подумаем', 'разберемся',
+        'детектив', 'консультант', 'диалог', 'контекст', 'загадка',
+        'разгадать', 'уточните', 'пожалуйста', 'должны', 'нужно',
+        'but we must', 'we need to', 'this is', 'could be',
+        'parse', 'query', 'fragment', 'typo', 'context',
+        'riddle', 'incomplete', 'nonsensical', 'clarify',
+        'response', 'prior', 'conversation', 'intend',
+        'literally', 'phrase', 'sentence', 'example',
+        'user', 'message', 'meaning', 'interpret',
+        'maybe', 'likely', 'probably', 'essentially', 'basically',
+        'alternatively', 'however', 'therefore', 'thus',
+        'прошлой модели', 'нормальный ответ', 'актуальное событие',
+        'готов', 'нужно', 'предполагаю',
+    ]
 
     for sentence in sentences:
         s = sentence.strip()
         if not s:
             continue
 
-        bad_words = [
-            'инструкци', 'рассуждени', 'мысл', 'думать', 'должен', 'нужно',
-            'следуя', 'надо', 'пользователь', 'спросил', 'запрос', 'вопрос',
-            'ответить', 'сказать', 'перечислим', 'обычно', 'уточнить',
-            'речь', 'кратко', 'стиле', 'используя', 'ранее', 'просит',
-            'поскольку', 'так как', 'важно', 'требуется', 'может означать',
-            'формально', 'вероятно', 'имеет в виду', 'лучше всего',
-            'привет', 'здравствуй', 'шерлок холмс', 'подумаем', 'разберемся'
-        ]
-
-        if not any(word in s.lower() for word in bad_words):
+        is_bad = any(word in s.lower() for word in bad_words)
+        if not is_bad:
             clean_sentences.append(s)
 
     if clean_sentences:
         result = '. '.join(clean_sentences)
         if result:
             return result + '.'
-
-    match = re.search(r'Ответ[:\s]+([^.!?]*[.!?])', text, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
 
     if sentences:
         last = sentences[-1].strip()
@@ -102,7 +165,7 @@ def extract_final_answer(text: str) -> str:
 
 async def search_with_tavily(query: str) -> str:
     try:
-        response = tavily_client.search(
+        response = await tavily_client.search(
             query=query,
             max_results=5,
             search_depth="basic",
@@ -163,7 +226,9 @@ async def main(request: Request):
     if session_id not in sessions:
         logger.info(f"🆕 Новая сессия: {session_id}")
         sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        return response_body(body, "Привет, я Шерлок Холмс.")
+        
+        if not user_text or user_text.strip() == "":
+            return response_body(body, "Привет, я Шерлок Холмс.")
 
     if not user_text:
         return response_body(body, "Слушаю.")
@@ -204,7 +269,7 @@ async def main(request: Request):
                     "max_tokens": max_tokens,
                     "temperature": 0.3
                 },
-                timeout=ClientTimeout(total=4.0)
+                timeout=ClientTimeout(total=4.5)
             ) as resp:
                 data = await resp.json()
 
