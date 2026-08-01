@@ -6,7 +6,7 @@ import re
 from fastapi import FastAPI, Request
 from aiohttp import ClientSession, ClientTimeout, ClientError
 from datetime import datetime
-from tavily import TavilyClient
+from tavily import AsyncTavilyClient  # 🔥 ИМПОРТ АСИНХРОННОГО КЛИЕНТА
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -20,7 +20,7 @@ DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
 TAVILY_API_KEY = "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"
-tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
+tavily_client = AsyncTavilyClient(api_key=TAVILY_API_KEY)  # 🔥 АСИНХРОННЫЙ КЛИЕНТ
 
 if not DEEPSEEK_API_KEY:
     logger.error("DEEPSEEK_API_KEY не найден!")
@@ -39,7 +39,6 @@ SYSTEM_PROMPT = """Ты — Шерлок Холмс.
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
-# 🔥 СПИСОК ДЛЯ ПОИСКА (без войны, аварий, катастроф)
 SEARCH_KEYWORDS = [
     "погода", "новости", "сегодня", "завтра", "вчера", 
     "концерт", "событие", "курс", "биткоин", "доллар", "евро",
@@ -48,7 +47,6 @@ SEARCH_KEYWORDS = [
     "найди", "найти", "поищи", "узнай", "проверь", "найди в интернете"
 ]
 
-# 🔥 РЕЦЕПТЫ НЕ ИЩЕМ
 NO_SEARCH_KEYWORDS = ["рецепт", "шарлотка", "яичница", "блины", "оладьи", "суп", "борщ"]
 
 def extract_final_answer(text: str) -> str:
@@ -103,7 +101,8 @@ def extract_final_answer(text: str) -> str:
 
 async def search_with_tavily(query: str) -> str:
     try:
-        response = tavily_client.search(
+        # 🔥 АСИНХРОННЫЙ ВЫЗОВ
+        response = await tavily_client.search(
             query=query,
             max_results=5,
             search_depth="basic",
@@ -161,10 +160,15 @@ async def main(request: Request):
 
     LAST_ACTIVITY[session_id] = datetime.now()
 
+    # 🔥 НОВАЯ СЕССИЯ — НО НЕ ИГНОРИРУЕМ ВОПРОС
     if session_id not in sessions:
-        logger.info(f"Новая сессия: {session_id}")
+        logger.info(f"🆕 Новая сессия: {session_id}")
         sessions[session_id] = [{"role": "system", "content": SYSTEM_PROMPT}]
-        return response_body(body, "Привет, я Шерлок Холмс.")
+        
+        # Если пользователь ничего не спросил — просто приветствуем
+        if not user_text or user_text.strip() == "":
+            return response_body(body, "Привет, я Шерлок Холмс.")
+        # Если спросил — продолжаем обработку
 
     if not user_text:
         return response_body(body, "Слушаю.")
