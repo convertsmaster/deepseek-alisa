@@ -66,7 +66,6 @@ def extract_final_answer(text: str) -> str:
     if not text:
         return ""
 
-    # 🔥 УДАЛЯЕМ ВСЁ, ЧТО ПОХОЖЕ НА РАССУЖДЕНИЯ
     garbage_patterns = [
         r'^.*?подумал.*?\.',
         r'^.*?решил.*?\.',
@@ -158,7 +157,6 @@ def extract_final_answer(text: str) -> str:
     for pattern in garbage_patterns:
         text = re.sub(pattern, '', text, flags=re.IGNORECASE | re.DOTALL)
 
-    # 🔥 ОСТАВЛЯЕМ ТОЛЬКО ПОСЛЕДНЕЕ ПРЕДЛОЖЕНИЕ (ОНО ЧАЩЕ ВСЕГО ПОЛЕЗНОЕ)
     sentences = re.split(r'[.!?]', text)
     useful_sentences = []
     
@@ -167,11 +165,9 @@ def extract_final_answer(text: str) -> str:
         if not s:
             continue
         
-        # Пропускаем короткие предложения (меньше 20 символов)
         if len(s) < 20:
             continue
         
-        # Пропускаем предложения с явными маркерами рассуждений
         bad_markers = [
             'думаю', 'считаю', 'кажется', 'возможно', 'наверное',
             'вероятно', 'подумал', 'решил', 'сказал', 'должен',
@@ -199,10 +195,8 @@ def extract_final_answer(text: str) -> str:
             useful_sentences.append(s)
     
     if useful_sentences:
-        # Берем первое полезное предложение (оно чаще всего содержит ответ)
         return useful_sentences[0] + '.'
 
-    # Если ничего не нашли — берем последнее предложение
     if sentences:
         last = sentences[-1].strip()
         if last and len(last) > 10:
@@ -314,7 +308,8 @@ async def main(request: Request):
                     "model": "deepseek-v4-flash",
                     "messages": sessions[session_id],
                     "max_tokens": max_tokens,
-                    "temperature": 0.3
+                    "temperature": 0.3,
+                    "thinking": {"type": "disabled"}
                 },
                 timeout=ClientTimeout(total=4.5)
             ) as resp:
@@ -329,6 +324,9 @@ async def main(request: Request):
                         if reasoning:
                             answer = extract_final_answer(reasoning)
                             logger.info(f"Извлек из reasoning: {answer}")
+                        else:
+                            answer = "Сервер занят. Попробуйте повторить запрос через 5-10 секунд."
+                            logger.warning("⚠️ DeepSeek вернул пустой content и пустой reasoning_content")
                     else:
                         if any(word in answer.lower() for word in ['инструкци', 'рассуждени', 'мысл', 'думать', 'привет', 'подумаем']):
                             reasoning = message.get("reasoning_content", "")
