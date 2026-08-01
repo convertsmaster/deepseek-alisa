@@ -29,22 +29,27 @@ sessions = {}
 LAST_ACTIVITY = {}
 
 SYSTEM_PROMPT = """Ты — Шерлок Холмс.
+Твой ответ будет озвучен голосом. Пиши просто, без списков и таблиц.
+Числа пиши словами, если это уместно.
 Отвечай развернуто, но по делу. 3-5 предложений.
 НЕ объясняй свои мысли, НЕ говори о том, как ты отвечаешь.
-НЕ представляйся и НЕ здоровайся при каждом ответе.
 НЕ используй "элементарно", "мой друг", "замечательно", "весьма интересно".
 Просто дай информативный ответ без лишних слов.
-Будь уверенным, но без шаблонных фраз.
-
-Если пользователь спрашивает про актуальные события (погода, новости, фильмы, события), используй информацию из поиска."""
+Если пользователь спрашивает про актуальные события (погода, новости, фильмы, спорт), используй информацию из поиска."""
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
+# 🔥 СПИСОК ДЛЯ ПОИСКА (без войны, аварий, катастроф)
 SEARCH_KEYWORDS = [
-    "погода", "новости", "сегодня", "завтра", "вчера", "фильм", "кино",
+    "погода", "новости", "сегодня", "завтра", "вчера", 
     "концерт", "событие", "курс", "биткоин", "доллар", "евро",
-    "выборы", "президент", "война", "авария", "катастрофа"
+    "выборы", "президент", "фильм", "спектакль", "кино",
+    "счет", "матч", "футбол", "хоккей", "спорт",
+    "найди", "найти", "поищи", "узнай", "проверь", "найди в интернете"
 ]
+
+# 🔥 РЕЦЕПТЫ НЕ ИЩЕМ
+NO_SEARCH_KEYWORDS = ["рецепт", "шарлотка", "яичница", "блины", "оладьи", "суп", "борщ"]
 
 def extract_final_answer(text: str) -> str:
     if not text:
@@ -164,7 +169,7 @@ async def main(request: Request):
     if not user_text:
         return response_body(body, "Слушаю.")
 
-    needs_search = any(kw in user_text.lower() for kw in SEARCH_KEYWORDS)
+    needs_search = any(kw in user_text.lower() for kw in SEARCH_KEYWORDS) and not any(kw in user_text.lower() for kw in NO_SEARCH_KEYWORDS)
     search_result = None
     
     if needs_search:
@@ -182,8 +187,7 @@ async def main(request: Request):
             logger.info(f"✅ Поиск выполнен, данные добавлены в запрос")
 
     is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
-    # 🔥 УМЕНЬШИЛ max_tokens
-    max_tokens = 500 if is_expand else 350
+    max_tokens = 350 if is_expand else 250
 
     sessions[session_id].append({"role": "user", "content": user_text})
 
@@ -201,7 +205,7 @@ async def main(request: Request):
                     "max_tokens": max_tokens,
                     "temperature": 0.3
                 },
-                timeout=ClientTimeout(total=4.0)  # 🔥 УВЕЛИЧИЛ ТАЙМАУТ
+                timeout=ClientTimeout(total=4.0)
             ) as resp:
                 data = await resp.json()
 
@@ -246,10 +250,14 @@ async def main(request: Request):
                     answer = "Ошибка."
 
     except asyncio.TimeoutError:
-        answer = "Время вышло."
+        answer = "Сервер DeepSeek не отвечает. Попробуйте повторить запрос через 5-10 секунд."
+        logger.error("⏰ Таймаут DeepSeek!")
+    except ClientError as e:
+        answer = "Ошибка сети при подключении к DeepSeek. Проверьте интернет-соединение."
+        logger.error(f"🌐 Ошибка сети: {e}")
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
-        answer = "Ошибка."
+        answer = "Внутренняя ошибка сервера. Попробуйте позже."
+        logger.error(f"💥 Внутренняя ошибка: {e}")
 
     sessions[session_id].append({"role": "assistant", "content": answer})
 
