@@ -19,7 +19,6 @@ app = FastAPI()
 DEEPSEEK_API_URL = "https://api.deepseek.com/beta/chat/completions"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-# 🔥 ТВОЙ КЛЮЧ TAVILY
 TAVILY_API_KEY = "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"
 tavily_client = TavilyClient(api_key=TAVILY_API_KEY)
 
@@ -41,7 +40,6 @@ SYSTEM_PROMPT = """Ты — Шерлок Холмс.
 
 EXPAND_KEYWORDS = ["разверни", "подробнее", "расскажи детальнее", "объясни полностью", "поподробней", "подробно"]
 
-# 🔥 КЛЮЧЕВЫЕ СЛОВА ДЛЯ ПОИСКА
 SEARCH_KEYWORDS = [
     "погода", "новости", "сегодня", "завтра", "вчера", "фильм", "кино",
     "концерт", "событие", "курс", "биткоин", "доллар", "евро",
@@ -98,9 +96,7 @@ def extract_final_answer(text: str) -> str:
 
     return "Не знаю."
 
-# 🔥 ФУНКЦИЯ ПОИСКА ЧЕРЕЗ TAVILY
 async def search_with_tavily(query: str) -> str:
-    """Ищет в интернете через Tavily и возвращает результаты."""
     try:
         response = tavily_client.search(
             query=query,
@@ -109,12 +105,10 @@ async def search_with_tavily(query: str) -> str:
             include_answer=True
         )
         
-        # Если Tavily дал готовый ответ
         if response.get("answer"):
             logger.info(f"Tavily вернул готовый ответ: {response['answer'][:100]}...")
             return response["answer"]
         
-        # Иначе собираем результаты
         results = response.get("results", [])
         if not results:
             return None
@@ -170,7 +164,6 @@ async def main(request: Request):
     if not user_text:
         return response_body(body, "Слушаю.")
 
-    # 🔥 ПРОВЕРЯЕМ, НУЖЕН ЛИ ПОИСК
     needs_search = any(kw in user_text.lower() for kw in SEARCH_KEYWORDS)
     search_result = None
     
@@ -189,7 +182,8 @@ async def main(request: Request):
             logger.info(f"✅ Поиск выполнен, данные добавлены в запрос")
 
     is_expand = any(kw in user_text.lower() for kw in EXPAND_KEYWORDS)
-    max_tokens = 700 if is_expand else 500
+    # 🔥 УМЕНЬШИЛ max_tokens
+    max_tokens = 500 if is_expand else 350
 
     sessions[session_id].append({"role": "user", "content": user_text})
 
@@ -207,7 +201,7 @@ async def main(request: Request):
                     "max_tokens": max_tokens,
                     "temperature": 0.3
                 },
-                timeout=ClientTimeout(total=3.5)
+                timeout=ClientTimeout(total=4.0)  # 🔥 УВЕЛИЧИЛ ТАЙМАУТ
             ) as resp:
                 data = await resp.json()
 
